@@ -1,0 +1,226 @@
+---
+title: "Tarea Visualización de datos espaciales"
+output: html_notebook
+---
+*Carolina Giménez Arias*
+
+*1. Descarga y acondiciona los datos de población de las tres provincias de la Comunidad Valenciana, por municipios, de la página web del Instituto Nacional de Estadística Padrón municipal así obtendrás los valores del padrón municipal durante los últimos años (2 puntos).*
+```{r}
+library(readxl)
+library(tidyverse)
+library(lettercase)
+library(tmap)
+library(raster)
+library(shinyWidgets)
+```
+
+```{r}
+# Cargamos los datasets descargados:
+Alicante <- read_excel("./2856.xls")
+Valencia <- read_excel("./2903.xls")
+Castellon <- read_excel("./2865.xls")
+```
+
+```{r}
+a <- c()
+i = 1
+for (prov in c("Castellon", "Valencia", "Alicante")){
+  prov <- get(prov)
+  totales <- which(grepl("Hombres",prov)==TRUE)
+  prov <- prov[,1:totales-1]
+  colnames(prov) <- prov[which(prov[,2] == "Total")+1,]
+  colnames(prov)[1] <- "Municipio"
+  split <- as.data.frame(str_split_fixed(prov$Municipio, " ",2))
+  colnames(split) <- c("Codigo postal","Municipio")
+  prov <- cbind(split,prov[-1])
+  a[[i]] <- prov[as.numeric(which(prov$"2018" == "Total")+3):as.numeric(which(prov == "Notas:")-3),]
+  i = i+1
+}
+Castellon <- a[[1]]
+Valencia <- a[[2]]
+Alicante <- a[[3]]
+PoblacionCV <- rbind(Castellon, Valencia)
+PoblacionCV <- rbind(PoblacionCV,Alicante)
+sincod <- PoblacionCV[,2:length(PoblacionCV)] #Quitamos codigo postal 
+sincod <- sincod[,-which(colnames(sincod)=="1997")] # Quitamos el año 1997 ya que no contiene valores
+numericosincods <- as.data.frame(sapply(sincod[,2:length(sincod)], as.numeric))
+numericosincods <- cbind(Municipios=sincod[,1],numericosincods)
+```
+
+
+*Descarga un mapa de la Comunidad Valenciana por municipios y añade la información descargada del padrón municipal. (2 puntos )*
+
+```{r}
+SpainRegions <- getData('GADM', country='ESP', level=4)
+CVRegions <- SpainRegions[which(SpainRegions$NAME_1=="Comunidad Valenciana"),]
+qtm(CVRegions) #+ tm_layout("Comunidad Valenciana",legend.position = c("left","top"))
+```
+
+*Visualiza un mapa de la Comunidad que muestre la evolución de la población, por municipios. Dibuja un mapa por año (2 puntos )*
+
+Para facilitar esta tarea, ya que tenemos el principal inconveniente de que tenemos nombres de municipios tanto en castellano como en valenciano, he descargado de wikipedia las tablas de los municipios de Valencia, Castellón y Alicante, donde aparecen las traducciones de todos los municipios. (La columna VAR_NAME4 de CVRegions contiene las traducciones de algunos municipios, sin embargo, estas no siempre se corresponderán con las "oficiales" y no concordarán con los datos descargados del INE, razón por la cual he recurrido a los ficheros de wikipedia)
+```{r}
+wikivalencia <- read_excel("./wikiValencia.xlsx")
+wikicastellon <- read_excel("./wikiCastellon.xlsx")
+wikialicante <- read_excel("./wikiAlicante.xlsx")
+
+#Eliminamos las ultimas columnas de cada dataset porque no nos interesarán en este problema:
+wikivalencia <- wikivalencia[,1:3]
+wikicastellon <- wikicastellon[,1:3]
+wikialicante <- wikialicante[,1:2]
+colnames(wikivalencia) <- c("Español","Valenciano","Oficial")
+colnames(wikicastellon) <- c("Español","Valenciano","Oficial")
+colnames(wikialicante) <- c("Español","Valenciano")
+```
+
+Fuente: https://es.wikipedia.org/wiki/Anexo:Municipios_de_la_provincia_de_Valencia
+Fuente: https://es.wikipedia.org/wiki/Anexo:Municipios_de_la_provincia_de_Castell%C3%B3n
+Fuente: https://es.wikipedia.org/wiki/Anexo:Municipios_de_la_provincia_de_Alicante
+
+
+Arreglamos el desorden de letras:
+```{r}
+A <- str_split_fixed(sincod$Municipio, "/",2) #separamos palabras con "/"
+A2 <- str_split_fixed(A[,1], ",",2) # separamos palabras con ","
+A2[,2] <- str_replace_all(A2[,2], fixed(" "), "") %>%str_to_title()
+cambio <- paste(str_to_title(A2[,2]), A2[,1], sep=" ") #unimos en el orden correcto
+numericosincods$Municipio <- trimws(cambio) #quitamos espacios
+MunicipiosINE <- numericosincods$Municipio
+MunicipiosINE[which(startsWith(MunicipiosINE,"L\'"))] <- str_replace_all(MunicipiosINE[which(startsWith(MunicipiosINE, "L\'"))], fixed("L' "), "L'") #quito doble espacios en L'
+```
+
+Ahora hacemos uso de los datasets descargados de wikipedia para buscar coincidencias y traducir:
+```{r}
+desconocidos <- setdiff(MunicipiosINE, CVRegions$NAME_4) #municipios que estan en el documento del INE pero NO en el de mapas
+
+matches.val <- desconocidos[desconocidos %in% wikivalencia$Valenciano]
+matches.cast <- desconocidos[desconocidos %in% wikicastellon$Valenciano]
+matches.ali <- desconocidos[desconocidos %in% wikialicante$Valenciano]
+
+# Ahora sustituimos los matches por su traduccion en español:
+matches.val.es <- c()
+matches.cast.es <- c()
+matches.ali.es <- c()
+
+for (i in 1:length(matches.val)){
+ matches.val.es[i] <- wikivalencia$Español[which(wikivalencia$Valenciano==matches.val[i])]
+ MunicipiosINE[which(MunicipiosINE==matches.val[i])] <- matches.val.es[i] #Sustituimos las traducciones 
+}
+for (i in 1:length(matches.cast)){
+ matches.cast.es[i] <- wikicastellon$Español[which(wikicastellon$Valenciano==matches.cast[i])]
+ MunicipiosINE[which(MunicipiosINE==matches.cast[i])] <- matches.cast.es[i] #Sustituimos las traducciones 
+}
+for (i in 1:length(matches.ali)){
+ matches.ali.es[i] <- wikialicante$Español[which(wikialicante$Valenciano==matches.ali[i])]
+ MunicipiosINE[which(MunicipiosINE==matches.ali[i])] <- matches.ali.es[i] #Sustituimos las traducciones 
+}
+
+# Busco a mano aquellos que no ha podido detectar el algoritmo y los corrijo:
+MunicipiosINE[which(MunicipiosINE=="El Puig")] <- "Puig"
+MunicipiosINE[which(MunicipiosINE=="Montitxelvo")] <- "Montichelvo"
+MunicipiosINE[which(MunicipiosINE=="El Real de Gandía")] <- "Real de Gandía"
+MunicipiosINE[which(MunicipiosINE=="Alfara de la Baronía")] <- "Alfara de Algimia"
+MunicipiosINE[which(MunicipiosINE=="Serratella")] <- "Sarratella"
+MunicipiosINE[which(MunicipiosINE == "Callosa de Ensarriá")] <- "Callosa d'En Sarrià"
+MunicipiosINE[which(MunicipiosINE == "La Vall d'Ebo")] <- "Vall de Ebo"
+MunicipiosINE[which(MunicipiosINE == "Les Alqueries")] <- "Alquerías del Niño Perdido"
+MunicipiosINE[which(MunicipiosINE == "Useras")] <-  "Les Useras"
+MunicipiosINE[which(MunicipiosINE == "Benichembla")] <- "Binigembla"
+MunicipiosINE[which(MunicipiosINE == "Real")] <- "Real de Montroi"
+MunicipiosINE[which(MunicipiosINE == "Llocnou de la Corona")] <- "Lugar Nuevo de la Corona"
+
+# Guardamos en un único dataset
+MunicipiosINE <- as.data.frame(cbind(MunicipiosINE,numericosincods[,2:length(numericosincods)]))
+```
+
+A continuación se comprueban como las traducciones se han hecho correctamente (están todos los municipios y no hay diferencias entre nombres del documento del Instituto Nacional de Estadística y el mapa descargado):
+```{r}
+# Buscamos coincidencias en ambos sentidos (se podria hacer con la librería operaciones join dplyr )
+all((MunicipiosINE$MunicipiosINE %in% CVRegions$NAME_4))
+MunicipiosINE$MunicipiosINE[which(!(MunicipiosINE$MunicipiosINE %in% CVRegions$NAME_4))]
+
+# Coincidencida en el otro sentido
+all((CVRegions$NAME_4 %in% MunicipiosINE$MunicipiosINE))
+
+# Comprobamos que estén todos los municipios:
+setdiff(MunicipiosINE$MunicipiosINE,CVRegions$NAME_4)
+setdiff(CVRegions$NAME_4,MunicipiosINE$MunicipiosINE)
+```
+
+Unimos y representamos el año 2018 (por ejemplo):
+```{r}
+# Unimos:
+CVPoblacion <-sp::merge(CVRegions, MunicipiosINE, by.x="NAME_4", by.y="MunicipiosINE")
+
+# Representamos:
+tmap_mode("plot")
+tm_shape(CVPoblacion) + tm_fill("2018", style = "quantile", n = 10) +  tm_polygons() + tm_compass(type = "rose", position = c("left", "top"), size = 3) + tm_layout(legend.outside=TRUE)
+
+Pob.shiny <- CVPoblacion #guardamos para luego usarlo
+```
+
+Dibujo un mapa por año (de 1998 al 2008):
+```{r}
+tmap_mode("plot")
+gif <- c()
+for (i in 1:20){
+an <- 1998:2018
+gif[[i]] <- tm_shape(CVPoblacion) + tm_fill(paste(an[i]), style = "quantile", n = 10) + tm_polygons() + tm_compass(type = "rose", position = c("left", "top"), size = 3) +tm_layout(main.title = paste("Poblacion en la CV en",an[i]),legend.outside=TRUE)
+}
+
+gif
+```
+
+
+*4. Revisa el capítulo 8 del libro Geocomputation with R, Making Maps in R y haz que se muestre la evolución de la población en forma de animación en una misma gráfica. (1 punto)*
+```{r}
+CVPoblacion@data <- gather(data = CVPoblacion@data, key = "year", value = "poblacion", 15:36) %>% arrange(year)
+tm = tm_shape(CVPoblacion) + tm_fill("poblacion", style = "quantile", n = 10) + tm_facets(along = "year", free.coords = FALSE)
+
+# Guardamos la animación con un retardo de 60 ms:
+tmap_animation(tm, filename = "cv_anim.gif", delay = 40)
+```
+
+
+*5. Integrar la aplicación en un Shiny para que el usuario pueda elegir la provincia a representar. (1p)*
+```{r warning=FALSE}
+# Cargamos librerías:
+library(shiny)  
+library(leaflet)
+
+
+ui <-  fluidPage(
+    h4("Población en la Comunidad Valenciana", style="text-align: center;"),
+    mainPanel(
+      leafletOutput(outputId = "map"),
+      br()
+    ),
+    sidebarPanel(
+      wellPanel(
+        selectInput("prov", "Seleccione la provincia a representar:",
+                     c("Castellón" = "Castellón", "Valencia" = "Valencia", "Alicante" = "Alicante")),
+        sliderInput(inputId = "year", "Seleccione el año a representar:", min = 1996, max = 2018, value = 2008),
+        prettySwitch("boton", "Ver el mapa completo", value = FALSE, width = NULL, status = "success")
+        )
+    )
+)
+
+server <-  function(input, output) {
+  Datos <- reactive({
+    vars$ProvinciasUnicas <- unique(Pob.shiny$NAME_2)
+  })
+  
+  output$map <-  renderLeaflet({
+    if (input$boton == FALSE) {
+    tm <- tm_shape(Pob.shiny[Pob.shiny$NAME_2 == input$prov,]) + tm_fill(paste0(input$year), style = "quantile", n =10) + tm_polygons() + tm_compass(type = "rose", position = c("left", "top"), size = 3)
+    tmap_leaflet(tm)
+    } else{
+    tm <- tm_shape(Pob.shiny) + tm_fill(paste0(input$year), style = "quantile", n =10) + tm_polygons() + tm_compass(type = "rose", position = c("left", "top"), size = 3)
+    tmap_leaflet(tm)
+    }
+  })
+  
+}
+
+shinyApp(ui, server)
+```
